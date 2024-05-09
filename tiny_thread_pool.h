@@ -72,7 +72,7 @@ private:
         TTP_DEBUG("create new worker thread, current worker thread number: %llu\n", m_worker_thread_num);
     }
 public:
-    void addTask(std::function<void()> task)
+    void addTask(const std::function<void()>& task)
     {
         std::unique_lock<std::mutex> lock(m_lock);
         m_task_stack.push(task);
