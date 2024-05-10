@@ -5,10 +5,10 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <stack>
+#include <queue>
 #include <functional>
 
-#define TINY_THREAD_POOL_DEBUG 0
+#define TINY_THREAD_POOL_DEBUG 1
 
 #if TINY_THREAD_POOL_DEBUG
 #define TTP_DEBUG(fmt, ...) do {printf(fmt, ##__VA_ARGS__);}while(0)
@@ -28,21 +28,23 @@ private:
 
     std::mutex m_lock;
     std::condition_variable m_cv;
-    std::stack<std::function<void()>> m_task_stack;
+    std::queue<std::function<void()>> m_task_queue;
     void worker()
     {
         while (true)
         {
-            std::unique_lock<std::mutex> lock(m_lock);
-            while (m_task_stack.empty())
+            std::function<void()> stored_task;
             {
-                m_cv.wait(lock);
-            }
+                std::unique_lock<std::mutex> lock(m_lock);
+                while (m_task_queue.empty())
+                {
+                    m_cv.wait(lock);
+                }
 
-            // start doing task
-            auto stored_task = static_cast<std::function<void()>>(m_task_stack.top());
-            m_task_stack.pop();
-            lock.unlock();
+                // start taking task
+                stored_task = static_cast<std::function<void()>>(m_task_queue.front());
+                m_task_queue.pop();
+            }
 
             try {
                 if (stored_task)
@@ -54,7 +56,7 @@ private:
                 std::cerr << "Failed to execute " << typeid(decltype(stored_task)).name() << ":" << e.what() << std::endl;
             }
 
-            lock.lock();
+            std::unique_lock<std::mutex> lock(m_lock);
             m_busy_worker_thread_num--;
             if (m_worker_thread_num > m_init_thread_num)
             {
@@ -69,15 +71,17 @@ private:
         m_worker_thread_num++;
         std::thread worker_thread(&TinyThreadPool::worker, this);
         worker_thread.detach();
-        TTP_DEBUG("create new worker thread, current worker thread number: %llu\n", m_worker_thread_num);
+        TTP_DEBUG("create new worker thread, current worker thread number: %lu\n", m_worker_thread_num);
     }
 public:
-    void addTask(const std::function<void()>& task)
+    template<class Fn, class... Args>
+    void addTask(Fn&& fn, Args&&... args)
     {
         std::unique_lock<std::mutex> lock(m_lock);
-        m_task_stack.push(task);
+        auto task = std::bind(std::forward<Fn>(fn), std::forward<Args>(args)...);
+        m_task_queue.push(task);
         m_busy_worker_thread_num++;
-        TTP_DEBUG("busy_worker_thread_num: %llu\n", m_busy_worker_thread_num);
+        TTP_DEBUG("busy_worker_thread_num: %lu\n", m_busy_worker_thread_num);
         if (m_busy_worker_thread_num > m_worker_thread_num && m_worker_thread_num < max_worker_thread_num_limit)
         {
             createWorkerThread();
@@ -96,7 +100,7 @@ public:
     {
         if (m_init_thread_num > max_worker_thread_num_limit)
         {
-            printf("create TinyThreadPool failed, init thread number must less than or equal to %llu\n", max_worker_thread_num_limit);
+            printf("create TinyThreadPool failed, init thread number must less than or equal to %lu\n", max_worker_thread_num_limit);
             return;
         }
         for (size_t i = 0; i < m_init_thread_num; i++)
