@@ -7,7 +7,7 @@
 #include <condition_variable>
 #include <queue>
 #include <functional>
-#include <atomic>
+
 #define TINY_THREAD_POOL_DEBUG 1
 
 #if TINY_THREAD_POOL_DEBUG
@@ -29,11 +29,9 @@ private:
     std::mutex m_lock;
     std::condition_variable m_cv;
     std::queue<std::function<void()>> m_task_queue;
-
-    std::atomic<bool> m_thread_pool_exit_flag;
     void worker()
     {
-        while (!m_thread_pool_exit_flag)
+        while (true)
         {
             std::function<void()> stored_task;
             {
@@ -41,12 +39,6 @@ private:
                 while (m_task_queue.empty())
                 {
                     m_cv.wait(lock);
-                    if (m_thread_pool_exit_flag)
-                    {
-                        m_worker_thread_num--;
-                        TTP_DEBUG("wroker thread exit, remaining number %lu\n", m_worker_thread_num);
-                        return;
-                    }
                 }
 
                 // start taking task
@@ -69,13 +61,10 @@ private:
             if (m_worker_thread_num > m_init_thread_num)
             {
                 m_worker_thread_num--;
-                TTP_DEBUG("wroker thread exit, remaining number %lu\n", m_worker_thread_num);
+                TTP_DEBUG("wroker thread exit\n");
                 return; // destroy this worker thread
             }
         }
-        std::unique_lock<std::mutex> lock(m_lock);
-        m_worker_thread_num--;
-        TTP_DEBUG("wroker thread exit, remaining number %lu\n", m_worker_thread_num);
     }
     void createWorkerThread()
     {
@@ -100,20 +89,14 @@ public:
         m_cv.notify_all();
     }
 public:
-    TinyThreadPool() : m_init_thread_num(default_init_thread_num), 
-                       m_worker_thread_num(0), 
-                       m_busy_worker_thread_num(0), 
-                       m_thread_pool_exit_flag(false)
+    TinyThreadPool() : m_init_thread_num(default_init_thread_num), m_worker_thread_num(0), m_busy_worker_thread_num(0)
     {
         for (size_t i = 0; i < m_init_thread_num; i++)
         {
             createWorkerThread();
         }
     }
-    explicit TinyThreadPool(size_t thread_num) : m_init_thread_num(thread_num), 
-                                                 m_worker_thread_num(0),
-                                                 m_busy_worker_thread_num(0),
-                                                 m_thread_pool_exit_flag(false)
+    explicit TinyThreadPool(size_t thread_num) : m_init_thread_num(thread_num), m_worker_thread_num(0), m_busy_worker_thread_num(0)
     {
         if (m_init_thread_num > max_worker_thread_num_limit)
         {
@@ -125,19 +108,7 @@ public:
             createWorkerThread();
         }
     }
-    ~TinyThreadPool() 
-    {
-        m_thread_pool_exit_flag = true;
-        std::unique_lock<std::mutex> lock(m_lock);
-        for (size_t i = 0; i < m_worker_thread_num; i++)
-        {
-            m_cv.notify_one();
-        }
-        while (!m_worker_thread_num)
-        {
-            std::this_thread::yield();
-        }
-    }
+    ~TinyThreadPool() {}
 
     TinyThreadPool(TinyThreadPool&) = delete;
     TinyThreadPool& operator=(TinyThreadPool&) = delete;
